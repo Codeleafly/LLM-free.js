@@ -12,11 +12,9 @@ const QUOTA_LIMIT = 1500;
 const userQuota = {};
 
 function getClientIP(req) {
-  return (
-    req.headers["x-forwarded-for"]?.split(",")[0] ||
-    req.socket?.remoteAddress ||
-    "unknown"
-  );
+  return req.headers["x-forwarded-for"]?.split(",")[0]
+    || req.socket.remoteAddress
+    || "unknown";
 }
 
 function resetQuotaIfNewDay(ip) {
@@ -26,47 +24,58 @@ function resetQuotaIfNewDay(ip) {
   }
 }
 
-function isValidRequest(body) {
-  return (
-    typeof body === "object" &&
-    typeof body.model === "string" &&
-    typeof body.text === "string"
-  );
+function normalizeModelName(raw) {
+  // Remove provider prefix if present
+  let m = raw.replace(/^.*\//, "").toLowerCase();
+  // Ensure it matches Gemini format: gemini-<gen>-<variation>
+  const parts = m.split("-");
+  if (parts[0] !== "gemini" || parts.length < 3) {
+    throw new Error("Unsupported model format");
+  }
+  // Add stable version suffix "00x" if missing
+  if (parts.length === 3) {
+    return `${parts.join("-")}-002`;
+  }
+  // Otherwise return full raw normalized
+  return parts.join("-");
 }
 
-// ✅ Endpoint: No separate provider field
 app.post("/smart-tell-line/api/v1", async (req, res) => {
   const ip = getClientIP(req);
   resetQuotaIfNewDay(ip);
-
   if (userQuota[ip].count >= QUOTA_LIMIT) {
-    return res.status(429).json({ error: "Daily quota (1,500 requests) exceeded." });
+    return res.status(429).json({ error: "Daily quota exceeded." });
   }
 
   const { model, text } = req.body;
+  if (typeof model !== "string" || typeof text !== "string") {
+    return res.status(400).json({ error: "Invalid format. Required: { model, text }" });
+  }
 
-  if (!isValidRequest(req.body)) {
-    return res.status(400).json({
-      error: "Invalid format. Required: { model, text }",
-    });
+  let normModel;
+  try {
+    normModel = normalizeModelName(model);
+  } catch {
+    return res.status(400).json({ error: "Unsupported model name format." });
   }
 
   try {
     const ctx = new Context();
-    const chatResp = await ctx.ai.chat(text, {
-      model,
-      stream: false,
+    const messages = [{ role: "user", content: text }];
+    const chatResp = await ctx.ai.chat(messages, {
+      model: normModel,
+      stream: false
     });
     const reply = await chatResp.text();
 
     userQuota[ip].count++;
-    res.json({ response: reply });
+    res.json({ model: normModel, response: reply });
   } catch (err) {
     console.error("❌ AI Error:", err);
-    res.status(500).json({ error: "AI response failed. Try again later." });
+    res.status(500).json({ error: "AI response failed." });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Live on port ${PORT} – endpoint: /smart-tell-line/api/v1`);
+  console.log(`🚀 Running on port ${PORT}`);
 });
