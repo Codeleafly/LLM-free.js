@@ -1,31 +1,34 @@
 const express = require("express");
+const cors = require("cors");
 const { Context } = require("@heyputer/putility");
-const app = express();
 
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ✅ Middlewares
+app.use(cors()); // 🌐 Enable CORS for frontend
 app.use(express.json());
 
-// ✅ Track per IP quota
-const userQuota = {};
+// ✅ Quota Setup
 const QUOTA_LIMIT = 1500;
+const userQuota = {}; // IP-based tracking
 
 function getClientIP(req) {
   return (
     req.headers["x-forwarded-for"]?.split(",")[0] ||
-    req.socket.remoteAddress ||
+    req.socket?.remoteAddress ||
     "unknown"
   );
 }
 
-function resetQuotaDaily() {
-  const now = new Date().toDateString();
-  for (const ip in userQuota) {
-    if (userQuota[ip].date !== now) {
-      userQuota[ip] = { count: 0, date: now };
-    }
+function resetQuotaIfNewDay(ip) {
+  const today = new Date().toDateString();
+  if (!userQuota[ip] || userQuota[ip].date !== today) {
+    userQuota[ip] = { count: 0, date: today };
   }
 }
 
-// ✅ Validate request body
+// ✅ Request Validator
 function isValidRequest(body) {
   return (
     typeof body === "object" &&
@@ -35,28 +38,25 @@ function isValidRequest(body) {
   );
 }
 
-// ✅ API Endpoint
+// ✅ Main Endpoint
 app.post("/smart-tell-line/api/v1", async (req, res) => {
-  resetQuotaDaily();
-
   const ip = getClientIP(req);
-  if (!userQuota[ip]) {
-    userQuota[ip] = { count: 0, date: new Date().toDateString() };
-  }
+  resetQuotaIfNewDay(ip);
 
+  // ✅ Quota limit check
   if (userQuota[ip].count >= QUOTA_LIMIT) {
-    return res.status(429).json({ error: "Daily quota (1,500 requests) exceeded." });
+    return res.status(429).json({
+      error: "Daily quota (1,500 requests) exceeded for your IP.",
+    });
   }
 
-  const body = req.body;
+  const { provider, model, text } = req.body;
 
-  if (!isValidRequest(body)) {
+  if (!isValidRequest(req.body)) {
     return res.status(400).json({
       error: "Invalid request format. Required: { provider, model, text }",
     });
   }
-
-  const { provider, model, text } = body;
 
   try {
     const ctx = new Context();
@@ -67,15 +67,15 @@ app.post("/smart-tell-line/api/v1", async (req, res) => {
 
     const reply = await result.text();
     userQuota[ip].count++;
+
     res.json({ response: reply });
   } catch (err) {
-    console.error("❌ AI Error:", err.message);
-    res.status(500).json({ error: "AI response failed. Please try again." });
+    console.error("❌ AI Error:", err);
+    res.status(500).json({ error: "AI response failed. Please try again later." });
   }
 });
 
-// ✅ Server start
-const PORT = process.env.PORT || 3000;
+// ✅ Server Live
 app.listen(PORT, () => {
-  console.log(`✅ API live at http://localhost:${PORT}/smart-tell-line/api/v1`);
+  console.log(`✅ Smart Tell Line API running on http://localhost:${PORT}/smart-tell-line/api/v1`);
 });
