@@ -1,6 +1,6 @@
 build command
 ```js
-npm init -y && npm install express @heyputer/putility cors 
+npm init -y && npm install express @heyputer/putility cors node-fetch
 ```
 ___
 Run command 
